@@ -72,8 +72,10 @@ class Pipeline:
             gradient_x_threshold,
             gradient_y_threshold,
             gradient_magnitude_threshold,
-            gradient_direction_threshold=(0, np.pi / 4)
+            gradient_direction_threshold,
+            source_points
     ) -> None:
+        self.__source_points = source_points
         self.__ksize = ksize
         self.__gradient_x_threshold = gradient_x_threshold
         self.__gradient_y_threshold = gradient_y_threshold
@@ -107,7 +109,7 @@ class Pipeline:
         self.__image_saver.save('undistort', self.current_filename, image)
         return image
 
-    def __get_binary_image(self, image):
+    def __color_threshold(self, image):
         image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
 
         white_mask = cv2.inRange(
@@ -126,6 +128,10 @@ class Pipeline:
             yellow_mask
         )
         self.__image_saver.save('color', self.current_filename, image)
+
+        return image
+
+    def __edge_detection(self, image):
 
         # Define a function that takes an image, gradient orientation,
         # and threshold min / max values.
@@ -198,13 +204,31 @@ class Pipeline:
 
         self.__image_saver.save('binary', self.current_filename, combined)
 
-        return image
+        return combined
+
+    def __perspective_transform(self, image):
+        image_shape = (image.shape[1], image.shape[0])
+        destination_points = np.float32([
+            [image_shape[0]/4, 0],
+            [3*image_shape[0]/4, 0],
+            [3*image_shape[0]/4, image_shape[1]],
+            [image_shape[0]/4, image_shape[1]]
+        ])
+        transformation_matrix = cv2.getPerspectiveTransform(self.__source_points, destination_points)
+        reverse_transformation_matrix = cv2.getPerspectiveTransform(destination_points, self.__source_points)
+
+        image = cv2.warpPerspective(src=image, M=transformation_matrix, dsize=image_shape)
+
+        self.__image_saver.save('perspective', self.current_filename, image)
+        return image, reverse_transformation_matrix
 
     def process(self, image):
         source_image = image.copy()
 
         image = self.__undistort(image)
-        image = self.__get_binary_image(image)
+        image = self.__color_threshold(image)
+        image = self.__edge_detection(image)
+        image, reverse = self.__perspective_transform(image)
 
         return image
 
@@ -248,7 +272,13 @@ def main():
         gradient_x_threshold=(0, 50),
         gradient_y_threshold=(0, 50),
         gradient_magnitude_threshold=(0, 50),
-        gradient_direction_threshold=(0, np.pi/4)
+        gradient_direction_threshold=(0, np.pi/4),
+        source_points=np.float32([
+            [618, 440],
+            [703, 440],
+            [1120, 700],
+            [250, 700]
+        ])
     )
     test_images = glob.glob('./test_images/*.jpg')
 
