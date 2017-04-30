@@ -67,18 +67,24 @@ class Pipeline:
             dist_coeffs,
             image_saver,
             yellow_lane_hsv_range,
-            white_lane_hsv_range
+            white_lane_hsv_range,
+            ksize,
+            gradient_x_threshold,
+            gradient_y_threshold,
+            gradient_magnitude_threshold,
+            gradient_direction_threshold=(0, np.pi / 4)
     ) -> None:
+        self.__ksize = ksize
+        self.__gradient_x_threshold = gradient_x_threshold
+        self.__gradient_y_threshold = gradient_y_threshold
+        self.__gradient_magnitude_threshold = gradient_magnitude_threshold
+        self.__gradient_direction_threshold = gradient_direction_threshold
         self.__white_lane_hsv_range = white_lane_hsv_range
         self.__yellow_lane_hsv_range = yellow_lane_hsv_range
         self.__image_saver = image_saver
         self.__camera_matrix = camera_matrix
         self.__dist_coeffs = dist_coeffs
         self.current_filename = None
-
-    # TODO get binary image
-    # Color threshold
-    # canny
 
     # TODO Perspective transform
 
@@ -119,11 +125,78 @@ class Pipeline:
             white_mask,
             yellow_mask
         )
+        self.__image_saver.save('color', self.current_filename, image)
 
-        image = cv2.Canny(image)
+        # Define a function that takes an image, gradient orientation,
+        # and threshold min / max values.
+        def abs_sobel_thresh(img, orient='x', thresh=None, sobel_kernel=None):
+            thresh_min = thresh[0]
+            thresh_max = thresh[1]
+            # Convert to grayscale
+            gray = img
+            # Apply x or y gradient with the OpenCV Sobel() function
+            # and take the absolute value
+            if orient == 'x':
+                abs_sobel = np.absolute(cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel))
+            elif orient == 'y':
+                abs_sobel = np.absolute(cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel))
+            else:
+                raise Exception('Invalid `orient`')
+            # Rescale back to 8 bit integer
+            scaled_sobel = np.uint8(255 * abs_sobel / np.max(abs_sobel))
+            # Create a copy and apply the threshold
+            binary_output = np.zeros_like(scaled_sobel)
+            # Here I'm using inclusive (>=, <=) thresholds, but exclusive is ok too
+            binary_output[(scaled_sobel >= thresh_min) & (scaled_sobel <= thresh_max)] = 1
 
+            # Return the result
+            return binary_output
 
-        self.__image_saver.save('binary', self.current_filename, image)
+        # Define a function to return the magnitude of the gradient
+        # for a given sobel kernel size and threshold values
+        def mag_thresh(img, sobel_kernel=3, mag_thresh=(0, 255)):
+            # Convert to grayscale
+            gray = img
+            # Take both Sobel x and y gradients
+            sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
+            sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
+            # Calculate the gradient magnitude
+            gradmag = np.sqrt(sobelx ** 2 + sobely ** 2)
+            # Rescale to 8 bit
+            scale_factor = np.max(gradmag) / 255
+            gradmag = (gradmag / scale_factor).astype(np.uint8)
+            # Create a binary image of ones where threshold is met, zeros otherwise
+            binary_output = np.zeros_like(gradmag)
+            binary_output[(gradmag >= mag_thresh[0]) & (gradmag <= mag_thresh[1])] = 1
+
+            # Return the binary image
+            return binary_output
+
+        def dir_threshold(image, sobel_kernel=3, thresh=(0, np.pi / 2)):
+            # Grayscale
+            # Calculate the x and y gradients
+            gray = image
+            sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
+            sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobel_kernel)
+            # Take the absolute value of the gradient direction,
+            # apply a threshold, and create a binary image result
+            absgraddir = np.arctan2(np.absolute(sobely), np.absolute(sobelx))
+            binary_output = np.zeros_like(absgraddir)
+            binary_output[(absgraddir >= thresh[0]) & (absgraddir <= thresh[1])] = 1
+
+            # Return the binary image
+            return binary_output
+
+        # Apply each of the thresholding functions
+        gradx = abs_sobel_thresh(image, orient='x', sobel_kernel=self.__ksize, thresh=self.__gradient_x_threshold)
+        grady = abs_sobel_thresh(image, orient='y', sobel_kernel=self.__ksize, thresh=self.__gradient_y_threshold)
+        mag_binary = mag_thresh(image, sobel_kernel=self.__ksize, mag_thresh=self.__gradient_magnitude_threshold)
+        dir_binary = dir_threshold(image, sobel_kernel=self.__ksize, thresh=self.__gradient_direction_threshold)
+
+        combined = np.zeros_like(dir_binary)
+        combined[((gradx == 0) & (grady == 0)) | ((mag_binary == 0) & (dir_binary == 0))] = 255
+
+        self.__image_saver.save('binary', self.current_filename, combined)
 
         return image
 
@@ -170,7 +243,12 @@ def main():
         white_lane_hsv_range=(
             white_lower_bound,
             white_upper_bound
-        )
+        ),
+        ksize=3,
+        gradient_x_threshold=(0, 50),
+        gradient_y_threshold=(0, 50),
+        gradient_magnitude_threshold=(0, 50),
+        gradient_direction_threshold=(0, np.pi/4)
     )
     test_images = glob.glob('./test_images/*.jpg')
 
