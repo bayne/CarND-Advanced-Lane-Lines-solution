@@ -213,10 +213,10 @@ class Pipeline:
     def __perspective_transform(self, image):
         image_shape = (image.shape[1], image.shape[0])
         destination_points = np.float32([
-            [image_shape[0]/4, 0],
-            [3*image_shape[0]/4, 0],
-            [3*image_shape[0]/4, image_shape[1]],
-            [image_shape[0]/4, image_shape[1]]
+            [image_shape[0] / 4, 0],
+            [3 * image_shape[0] / 4, 0],
+            [3 * image_shape[0] / 4, image_shape[1]],
+            [image_shape[0] / 4, image_shape[1]]
         ])
         transformation_matrix = cv2.getPerspectiveTransform(self.__source_points, destination_points)
         reverse_transformation_matrix = cv2.getPerspectiveTransform(destination_points, self.__source_points)
@@ -275,9 +275,9 @@ class Pipeline:
             cv2.rectangle(out_img, (win_xright_low, win_y_low), (win_xright_high, win_y_high), (0, 255, 0), 2)
             # Identify the nonzero pixels in x and y within the window
             good_left_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xleft_low) & (
-            nonzerox < win_xleft_high)).nonzero()[0]
+                nonzerox < win_xleft_high)).nonzero()[0]
             good_right_inds = ((nonzeroy >= win_y_low) & (nonzeroy < win_y_high) & (nonzerox >= win_xright_low) & (
-            nonzerox < win_xright_high)).nonzero()[0]
+                nonzerox < win_xright_high)).nonzero()[0]
             # Append these indices to the lists
             left_lane_inds.append(good_left_inds)
             right_lane_inds.append(good_right_inds)
@@ -338,17 +338,15 @@ class Pipeline:
         image = self.__edge_detection(image)
         image, reverse = self.__perspective_transform(image)
         image, left_fitx, right_fitx, ploty = self.__lane_pixels(image)
-        image = self.__annotate_lane(source_image=source_image,warped_image=image, reverse_matrix=reverse,
+        image = self.__annotate_lane(source_image=source_image, warped_image=image, reverse_matrix=reverse,
                                      left_fitx=left_fitx, right_fitx=right_fitx, ploty=ploty)
 
         return image
 
 
-
-def main():
-    save_images = True
-    image_saver = ImageSaver('./output_images', save_images)
+def get_pipeline(image_saver):
     calibration_file = './calibration.p'
+
     if os.path.isfile(calibration_file):
         with open(calibration_file, 'rb') as file:
             retval, camera_matrix, dist_coeffs, rvecs, tvecs = pickle.load(file)
@@ -368,7 +366,7 @@ def main():
     white_lower_bound = np.array([int(0.0 * 255), int(0.0 * 255), int(0.75 * 255)], dtype="uint8")
     white_upper_bound = np.array([int(1.0 * 255), int(0.1 * 255), int(1.0 * 255)], dtype="uint8")
 
-    pipeline = Pipeline(
+    return Pipeline(
         camera_matrix=camera_matrix,
         dist_coeffs=dist_coeffs,
         image_saver=image_saver,
@@ -384,7 +382,7 @@ def main():
         gradient_x_threshold=(0, 50),
         gradient_y_threshold=(0, 50),
         gradient_magnitude_threshold=(0, 50),
-        gradient_direction_threshold=(0, np.pi/4),
+        gradient_direction_threshold=(0, np.pi / 4),
         source_points=np.float32([
             [618, 440],
             [703, 440],
@@ -394,6 +392,14 @@ def main():
         window_margin=100,
         window_min=50
     )
+
+
+def process_test_images():
+    save_images = True
+    image_saver = ImageSaver('./output_images', save_images)
+
+    pipeline = get_pipeline(image_saver)
+
     test_images = glob.glob('./test_images/*.jpg')
 
     for test_image in test_images:
@@ -403,6 +409,34 @@ def main():
         image = cv2.imread(test_image)
         image = pipeline.process(image)
         cv2.imwrite('./output_images/' + filename, image)
+
+
+from moviepy.editor import VideoFileClip
+
+
+
+def process_video():
+
+    image_saver = ImageSaver('./output_images', False)
+
+    pipeline = get_pipeline(image_saver)
+
+    clip = VideoFileClip(filename="./test.mp4")
+
+    pipeline.current_filename = "0_frame.png"
+    def process(image):
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = pipeline.process(image)
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        return image
+
+    clip = clip.fl_image(process)
+    clip.write_videofile(filename="./project_video_output.mp4", audio=False)
+
+
+def main():
+    # process_test_images()
+    process_video()
 
 
 if __name__ == "__main__":
