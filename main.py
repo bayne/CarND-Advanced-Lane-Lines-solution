@@ -74,10 +74,12 @@ class Pipeline:
             gradient_magnitude_threshold,
             gradient_direction_threshold,
             source_points,
+            destination_points,
             window_margin,
             window_min,
             region
     ) -> None:
+        self.__destination_points = destination_points
         self.__region = region
         self.__window_min = window_min
         self.__window_margin = window_margin
@@ -214,25 +216,14 @@ class Pipeline:
 
     def __perspective_transform(self, image, source_image):
         image_shape = (image.shape[1], image.shape[0])
-        # destination_points = np.float32([
-        #     [image_shape[0] / 4, 0],
-        #     [3 * image_shape[0] / 4, 0],
-        #     [3 * image_shape[0] / 4, image_shape[1]],
-        #     [image_shape[0] / 4, image_shape[1]]
-        # ])
-        left_midpoint = (self.__source_points[0][0] + self.__source_points[3][0])/2
-        right_midpoint = (self.__source_points[2][0] + self.__source_points[1][0])/2
-        destination_points = np.float32([
-            [left_midpoint, 500],
-            [right_midpoint, 500],
-            [right_midpoint, self.__source_points[2][1]],
-            [left_midpoint, self.__source_points[3][1]]
-        ])
+
+        destination_points = self.__destination_points
+
         transformation_matrix = cv2.getPerspectiveTransform(self.__source_points, destination_points)
         reverse_transformation_matrix = cv2.getPerspectiveTransform(destination_points, self.__source_points)
 
         def warp(matrix, image, image_shape):
-            return cv2.warpPerspective(src=image, M=matrix, dsize=image_shape, borderMode=cv2.BORDER_CONSTANT, flags=cv2.INTER_LINEAR)
+            return cv2.warpPerspective(src=image, M=matrix, dsize=image_shape, flags=cv2.INTER_LINEAR)
 
         image = warp(transformation_matrix, image, image_shape)
 
@@ -324,7 +315,7 @@ class Pipeline:
 
         self.__image_saver.save(filename=self.current_filename, sub_directory='lane_pixels', image=out_img)
 
-        return out_img, left_fitx, right_fitx, ploty, left_fit, right_fit
+        return out_img, left_fitx, right_fitx, ploty, left_fit, right_fit, leftx, rightx, lefty, righty
 
     def __annotate_lane(self, source_image, warped_image, reverse_matrix, left_fitx, right_fitx, ploty):
         # Create an image to draw the lines on
@@ -344,21 +335,39 @@ class Pipeline:
         # Combine the result with the original image
         return cv2.addWeighted(source_image, 1, newwarp, 0.3, 0)
 
-    def __lane_stats(self, image_shape, left_fit, right_fit):
+    def __lane_stats(self, image_shape, left_fit, right_fit, ploty, leftx, rightx, lefty, righty):
         y_eval = image_shape[1]
-        
-        leftx = left_fit[0] * y_eval ** 2 + left_fit[1] * y_eval + left_fit[2]
-        rightx = right_fit[0] * y_eval ** 2 + right_fit[1] * y_eval + right_fit[2]
 
-        feetPerPixel = 12/(rightx - leftx)
+        ym_per_pix = 12.0 / (self.__destination_points[3][1] - self.__destination_points[0][1])
+        xm_per_pix = 10.0 / (self.__destination_points[1][0] - self.__destination_points[0][0])
 
-        lane_midpoint_px = (rightx + leftx)/2
-        camera_midpoint_px = image_shape[0]/2
+        left = left_fit[0] * y_eval ** 2 + left_fit[1] * y_eval + left_fit[2]
+        right = right_fit[0] * y_eval ** 2 + right_fit[1] * y_eval + right_fit[2]
 
-        left_curverad = ((1 + (2 * left_fit[0] * y_eval + left_fit[1]) ** 2) ** 1.5) / np.absolute(2 * left_fit[0])
-        right_curverad = ((1 + (2 * right_fit[0] * y_eval + right_fit[1]) ** 2) ** 1.5) / np.absolute(2 * right_fit[0])
+        # feetPerPixel = 12 / (rightx - leftx)
 
-        # print((leftx, rightx, lane_midpoint_px, camera_midpoint_px, left_curverad/feetPerPixel, right_curverad/feetPerPixel))
+        lane_midpoint_px = (right + left) / 2
+        camera_midpoint_px = image_shape[0] / 2
+
+        offset_from_center = np.abs(lane_midpoint_px - camera_midpoint_px) * xm_per_pix
+
+        # Fit new polynomials to x,y in world space
+        left_fit_cr = np.polyfit(lefty * ym_per_pix, leftx * xm_per_pix, 2)
+        right_fit_cr = np.polyfit(righty * ym_per_pix, rightx * xm_per_pix, 2)
+        # Calculate the new radii of curvature
+        left_curverad = ((1 + (2 * left_fit_cr[0] * y_eval * ym_per_pix + left_fit_cr[1]) ** 2) ** 1.5) / np.absolute(
+            2 * left_fit_cr[0])
+        right_curverad = (
+                         (1 + (2 * right_fit_cr[0] * y_eval * ym_per_pix + right_fit_cr[1]) ** 2) ** 1.5) / np.absolute(
+            2 * right_fit_cr[0])
+        # Now our radius of curvature is in meters
+        # print(left_curverad, 'm', right_curverad, 'm')
+
+        return offset_from_center, np.min([left_curverad, right_curverad])
+
+    def __display_numbers(self, image, offset_from_center, curverad):
+        cv2.putText(image, 'Offset: {:.1f} Curve radius: {:.1f}'.format(offset_from_center, curverad), (30, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2)
 
     def __region_of_interest(self, img, source_image):
         """
@@ -388,24 +397,21 @@ class Pipeline:
             ignore_mask_color = 255
 
         # filling pixels inside the polygon defined by "vertices" with the fill color
-        cv2.fillPoly(mask, vertices, (255,255,255))
+        cv2.fillPoly(mask, vertices, ignore_mask_color)
 
         # returning the image only where mask pixels are nonzero
         masked_image = cv2.bitwise_and(img, mask)
 
         annotated_image = source_image.copy()
-        cv2.fillPoly(annotated_image, vertices, (255,255,255))
+        cv2.fillPoly(annotated_image, vertices, (255, 255, 255))
         # annotated_image= cv2.addWeighted(annotated_image, 1, mask, 0.3, 0)
 
         self.__image_saver.save(filename=self.current_filename, sub_directory='region', image=annotated_image)
-
 
         return masked_image
 
     def process(self, image):
         source_image = image.copy()
-
-
 
         image = self.__region_of_interest(image, source_image)
 
@@ -416,12 +422,12 @@ class Pipeline:
         image = self.__color_threshold(image)
         image = self.__edge_detection(image)
 
-
-        image, left_fitx, right_fitx, ploty, left_fit, right_fit = self.__lane_pixels(image)
+        image, left_fitx, right_fitx, ploty, left_fit, right_fit, leftx, rightx,lefty, righty = self.__lane_pixels(image)
         image = self.__annotate_lane(source_image=source_image, warped_image=image, reverse_matrix=reverse,
                                      left_fitx=left_fitx, right_fitx=right_fitx, ploty=ploty)
-        self.__lane_stats(image_shape=(source_image.shape[1], source_image.shape[0]),
-                          left_fit=left_fit, right_fit=right_fit)
+        offset_from_center, curverad = self.__lane_stats(image_shape=(source_image.shape[1], source_image.shape[0]),
+                          left_fit=left_fit, right_fit=right_fit, ploty=ploty, leftx=leftx, rightx=rightx, lefty=lefty, righty=righty)
+        self.__display_numbers(image, offset_from_center=offset_from_center, curverad=curverad)
 
         return image
 
@@ -448,6 +454,24 @@ def get_pipeline(image_saver):
     white_lower_bound = np.array([int(0.0 * 255), int(0.0 * 255), int(0.80 * 255)], dtype="uint8")
     white_upper_bound = np.array([int(1.0 * 255), int(0.10 * 255), int(1.0 * 255)], dtype="uint8")
 
+    ratio = (10, 12)
+    scale = 10
+    offset = (600, 300)
+
+    source_points = np.array([
+        [540, 488],
+        [750, 488],
+        [777, 508],
+        [507, 508]
+    ], dtype=np.float32)
+
+    destination_points = np.array([
+        [offset[0], offset[1]],
+        [offset[0] + ratio[0] * scale, offset[1]],
+        [offset[0] + ratio[0] * scale, offset[1] + ratio[1] * scale],
+        [offset[0], offset[1] + ratio[1] * scale]
+    ], dtype=np.float32)
+
     return Pipeline(
         camera_matrix=camera_matrix,
         dist_coeffs=dist_coeffs,
@@ -465,14 +489,10 @@ def get_pipeline(image_saver):
         gradient_y_threshold=(20, 90),
         gradient_magnitude_threshold=(0, 10),
         gradient_direction_threshold=(0, np.pi / 4),
-        source_points=np.float32([
-            [540, 495],
-            [757, 495],
-            [1040, 670],
-            [250, 670]
-        ]),
-        window_margin=130,
-        window_min=10,
+        source_points=source_points,
+        destination_points=destination_points,
+        window_margin=20,
+        window_min=5,
         region=np.array([
             [580, 435],
             [700, 435],
@@ -502,9 +522,7 @@ def process_test_images():
 from moviepy.editor import VideoFileClip
 
 
-
 def process_video():
-
     image_saver = ImageSaver('./output_images', False)
 
     pipeline = get_pipeline(image_saver)
@@ -512,6 +530,7 @@ def process_video():
     clip = VideoFileClip(filename="./project_video.mp4")
 
     pipeline.current_filename = "0_frame.png"
+
     def process(image):
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image = pipeline.process(image)
@@ -521,10 +540,29 @@ def process_video():
     clip = clip.fl_image(process)
     clip.write_videofile(filename="./project_video_output.mp4", audio=False)
 
+def process_challenge_video():
+    image_saver = ImageSaver('./output_images', False)
+
+    pipeline = get_pipeline(image_saver)
+
+    clip = VideoFileClip(filename="./challenge_video.mp4")
+
+    pipeline.current_filename = "0_frame.png"
+
+    def process(image):
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = pipeline.process(image)
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        return image
+
+    clip = clip.fl_image(process)
+    clip.write_videofile(filename="./challenge_video_output.mp4", audio=False)
+
 
 def main():
     # process_test_images()
-    process_video()
+    process_challenge_video()
+    # process_video()
 
 
 if __name__ == "__main__":
