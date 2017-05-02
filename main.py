@@ -49,10 +49,22 @@ def calibrate(calibration_images, chessboard_shape, image_saver):
 
 class ImageSaver:
     def __init__(self, output_directory, enabled) -> None:
+        """
+        :param output_directory: The directory to write the sub directories for the output images
+        :param enabled: Set to true to enable writing of the images
+        """
         self.enabled = enabled
         self.__output_directory = output_directory
 
     def save(self, sub_directory, filename, image):
+        """
+        Saves the image to the disk
+        
+        :param sub_directory: The subdirectory for the image to fall under
+        :param filename: The filename of the image
+        :param image: The image data
+        :return: 
+        """
         if self.enabled:
             directory = self.__output_directory + '/' + sub_directory + '/'
             if not os.path.exists(directory):
@@ -79,6 +91,26 @@ class Pipeline:
             window_min,
             region
     ) -> None:
+        """
+        :param camera_matrix: The distortion correction matrix
+        :param dist_coeffs: 
+        :param image_saver: an ImageSaver to use to save the images per pipeline component
+        :param yellow_lane_hsv_range: an ordered pair of tuples that specify the range of the yellow lane in HSV 
+                                      colorspace
+        :param white_lane_hsv_range: an ordered pair of tuples that specify the range of the white lane in HSV 
+                                     colorspace
+        :param ksize: The size of the kernel for the Sobel filter
+        :param gradient_x_threshold: The threshold of the gradient in the x direction for the Sobel filter
+        :param gradient_y_threshold: The threshold of the gradient in the y direction for the Sobel filter
+        :param gradient_magnitude_threshold: The threshold of the magnitude for the gradient in the Sobel filter
+        :param gradient_direction_threshold: The threshold of the direction for the gradient in the Sobel filter
+        :param source_points: The source points to use in the perspective transform this should be outlining the length 
+                              of a dash in a lane line and the width of a lane (10ft by 12ft)
+        :param destination_points: The destination points of the perspective transform
+        :param window_margin: The margin for the sliding window for the lane finding
+        :param window_min: The minimum step for the sliding window
+        :param region: The region of interest to mask for find the lane lines
+        """
         self.__destination_points = destination_points
         self.__region = region
         self.__window_min = window_min
@@ -96,19 +128,12 @@ class Pipeline:
         self.__dist_coeffs = dist_coeffs
         self.current_filename = None
 
-    # TODO Perspective transform
-
-    # TODO get lane pixels
-
-    # TODO get lane curvature
-
-    # TODO get vehicle position
-
-    # TODO overlay lane indicator over source image
-
-    # TODO visual numerical output of lane curvature and vehicle position
-
     def __undistort(self, image):
+        """
+        Undistorts the image
+        :param image: The image data
+        :return: An undistorted image
+        """
         image = cv2.undistort(
             src=image,
             cameraMatrix=self.__camera_matrix,
@@ -118,6 +143,11 @@ class Pipeline:
         return image
 
     def __color_threshold(self, image):
+        """
+        Removes pixels that are not within the color ranges
+        :param image: 
+        :return: 
+        """
         image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
 
         white_mask = cv2.inRange(
@@ -140,7 +170,11 @@ class Pipeline:
         return image
 
     def __edge_detection(self, image):
-
+        """
+        Using the Sobel filter, find the edge pixels for the lane lines
+        :param image: 
+        :return: 
+        """
         # Define a function that takes an image, gradient orientation,
         # and threshold min / max values.
         def abs_sobel_thresh(img, orient='x', thresh=None, sobel_kernel=None):
@@ -215,6 +249,12 @@ class Pipeline:
         return combined
 
     def __perspective_transform(self, image, source_image):
+        """
+        Transforms the image to a birds-eye view
+        :param image: 
+        :param source_image: 
+        :return: 
+        """
         image_shape = (image.shape[1], image.shape[0])
 
         destination_points = self.__destination_points
@@ -232,6 +272,11 @@ class Pipeline:
         return image, reverse_transformation_matrix
 
     def __lane_pixels(self, image):
+        """
+        Finds the pixels associated to the lane using a sliding window
+        :param image: 
+        :return: 
+        """
 
         binary_warped = image
 
@@ -318,6 +363,16 @@ class Pipeline:
         return out_img, left_fitx, right_fitx, ploty, left_fit, right_fit, leftx, rightx, lefty, righty
 
     def __annotate_lane(self, source_image, warped_image, reverse_matrix, left_fitx, right_fitx, ploty):
+        """
+        Draws the detected region of the lane lines
+        :param source_image: 
+        :param warped_image: 
+        :param reverse_matrix: Used for undistorting the image
+        :param left_fitx: 
+        :param right_fitx: 
+        :param ploty: 
+        :return: 
+        """
         # Create an image to draw the lines on
         warp_zero = np.zeros_like(warped_image).astype(np.uint8)
         color_warp = warp_zero
@@ -336,6 +391,18 @@ class Pipeline:
         return cv2.addWeighted(source_image, 1, newwarp, 0.3, 0)
 
     def __lane_stats(self, image_shape, left_fit, right_fit, ploty, leftx, rightx, lefty, righty):
+        """
+        Generates stats about the position and curvature of the lane
+        :param image_shape: 
+        :param left_fit: 
+        :param right_fit: 
+        :param ploty: 
+        :param leftx: 
+        :param rightx: 
+        :param lefty: 
+        :param righty: 
+        :return: 
+        """
         y_eval = image_shape[1]
 
         ym_per_pix = 12.0 / (self.__destination_points[3][1] - self.__destination_points[0][1])
@@ -411,6 +478,11 @@ class Pipeline:
         return masked_image
 
     def process(self, image):
+        """
+        Find the lane lines in the provided image
+        :param image: 
+        :return: 
+        """
         source_image = image.copy()
 
         image = self.__region_of_interest(image, source_image)
